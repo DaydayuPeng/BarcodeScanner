@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">兔咕噜扫码入库</string>
+    <string name="login_title">员工登录</string>
+    <string name="server_url">服务器地址</string>
+    <string name="username">用户名</string>
+    <string name="password">密码</string>
+    <string name="login">登录</string>
+    <string name="scan_title">快递扫码入库</string>
+    <string name="manual_hint">手动输入单号</string>
+    <string name="add">添加</string>
+    <string name="switch_camera">切换镜头</string>
+    <string name="clear_all">清空</string>
+    <string name="submit_inbound">入库</string>
+    <string name="logout">退出登录</string>
+    <string name="record_count">共 %1$d 条</string>
+    <string name="empty_records">暂无记录</string>
+    <string name="camera_permission_required">需要摄像头权限才能扫码</string>
+    <string name="please_input_tracking">请输入单号</string>
+</resources>

@@ -1,0 +1,513 @@
+package com.tugulu.scanner.ui
+
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageFormat
+import android.graphics.Matrix
+import android.graphics.Rect
+import android.graphics.YuvImage
+import android.media.AudioManager
+import android.media.ToneGenerator
+import android.os.Bundle
+import android.os.SystemClock
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.util.Size
+import android.view.View
+import android.view.inputmethod.EditorInfo
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+import androidx.camera.core.CameraInfo
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
+import com.google.mlkit.vision.barcode.BarcodeScanner
+import com.google.mlkit.vision.barcode.BarcodeScannerOptions
+import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.common.InputImage
+import com.tugulu.scanner.R
+import com.tugulu.scanner.TuguluApp
+import com.tugulu.scanner.data.ApiException
+import com.tugulu.scanner.data.ScanRecord
+import com.tugulu.scanner.databinding.ActivityScannerBinding
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+
+@OptIn(ExperimentalCamera2Interop::class)
+class ScannerActivity : AppCompatActivity() {
+
+    private lateinit var binding: ActivityScannerBinding
+    private val app get() = TuguluApp.instance
+
+    private lateinit var adapter: RecordAdapter
+    private val records = mutableListOf<ScanRecord>()
+    private var nextId = 1L
+
+    private var cameraProvider: ProcessCameraProvider? = null
+    private var cameraExecutor: ExecutorService? = null
+    private var barcodeScanner: BarcodeScanner? = null
+    private var cameraInfos: List<CameraInfo> = emptyList()
+    private var cameraIndex = 0
+    private var analyzingPaused = AtomicBoolean(false)
+    private val recentCodes = HashMap<String, Long>()
+    private var latestFrameBytes: ByteArray? = null
+    private var latestFrameWidth = 0
+    private var latestFrameHeight = 0
+    private var latestFrameRotation = 0
+    private val frameLock = Any()
+    private var statusHideAt = 0L
+    private var tone: ToneGenerator? = null
+
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) startCamera() else showStatus(getString(R.string.camera_permission_required), true)
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        if (!app.session.isLoggedIn) {
+            startActivity(Intent(this, LoginActivity::class.java))
+            finish()
+            return
+        }
+        binding = ActivityScannerBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+
+        adapter = RecordAdapter { deleteRecord(it) }
+        binding.rvRecords.layoutManager = LinearLayoutManager(this)
+        binding.rvRecords.adapter = adapter
+        refreshList()
+
+        binding.btnLogout.setOnClickListener {
+            app.session.clearAuth()
+            startActivity(Intent(this, LoginActivity::class.java))
+            finish()
+        }
+        binding.btnAdd.setOnClickListener { addManual() }
+        binding.etManual.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                addManual()
+                true
+            } else false
+        }
+        binding.etManual.setOnFocusChangeListener { _, hasFocus ->
+            analyzingPaused.set(hasFocus)
+        }
+        binding.btnSwitchCamera.setOnClickListener { switchCamera() }
+        binding.btnClear.setOnClickListener { clearAll() }
+        binding.btnSubmit.setOnClickListener { submitInbound() }
+        binding.ivLastPhoto.setOnClickListener {
+            records.lastOrNull()?.let { deleteRecord(it) }
+        }
+
+        cameraExecutor = Executors.newSingleThreadExecutor()
+        barcodeScanner = BarcodeScanning.getClient(
+            BarcodeScannerOptions.Builder()
+                .setBarcodeFormats(
+                    Barcode.FORMAT_CODE_128,
+                    Barcode.FORMAT_CODE_39,
+                    Barcode.FORMAT_CODE_93,
+                    Barcode.FORMAT_EAN_13,
+                    Barcode.FORMAT_EAN_8,
+                    Barcode.FORMAT_UPC_A,
+                    Barcode.FORMAT_UPC_E,
+                    Barcode.FORMAT_ITF,
+                    Barcode.FORMAT_CODABAR,
+                    Barcode.FORMAT_QR_CODE,
+                    Barcode.FORMAT_DATA_MATRIX
+                )
+                .build()
+        )
+        tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80)
+
+        ensureCameraPermission()
+    }
+
+    private fun ensureCameraPermission() {
+        when {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                == PackageManager.PERMISSION_GRANTED -> startCamera()
+            else -> permissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    private fun startCamera() {
+        val future = ProcessCameraProvider.getInstance(this)
+        future.addListener({
+            try {
+                cameraProvider = future.get()
+                bindCameraUseCases()
+                showStatus("扫码已就绪（ML Kit）")
+            } catch (e: Exception) {
+                showStatus("摄像头启动失败：${e.message}", true)
+            }
+        }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun bindCameraUseCases() {
+        val provider = cameraProvider ?: return
+        provider.unbindAll()
+
+        cameraInfos = provider.availableCameraInfos
+        if (cameraInfos.isEmpty()) {
+            showStatus("未找到可用摄像头", true)
+            return
+        }
+        // 优先恢复上次选择；否则优先后置
+        val saved = app.session.preferredCameraId
+        val savedIdx = cameraInfos.indexOfFirst { cameraIdOf(it) == saved }
+        cameraIndex = when {
+            savedIdx >= 0 -> savedIdx
+            else -> cameraInfos.indexOfFirst {
+                it.lensFacing == CameraSelector.LENS_FACING_BACK
+            }.coerceAtLeast(0)
+        }
+
+        val preview = Preview.Builder()
+            .build()
+            .also { it.setSurfaceProvider(binding.previewView.surfaceProvider) }
+
+        val analysis = ImageAnalysis.Builder()
+            .setTargetResolution(Size(1280, 720))
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .build()
+
+        analysis.setAnalyzer(cameraExecutor!!) { imageProxy ->
+            analyzeFrame(imageProxy)
+        }
+
+        val info = cameraInfos[cameraIndex.coerceIn(0, cameraInfos.lastIndex)]
+        val selector = info.cameraSelector
+
+        try {
+            provider.bindToLifecycle(this, selector, preview, analysis)
+            binding.btnSwitchCamera.visibility =
+                if (cameraInfos.size > 1) View.VISIBLE else View.GONE
+        } catch (e: Exception) {
+            showStatus("绑定摄像头失败：${e.message}", true)
+        }
+    }
+
+    private fun switchCamera() {
+        if (cameraInfos.size <= 1) return
+        cameraIndex = (cameraIndex + 1) % cameraInfos.size
+        val info = cameraInfos[cameraIndex]
+        app.session.preferredCameraId = cameraIdOf(info)
+        bindCameraUseCases()
+        showStatus("已切换镜头 ${cameraIndex + 1}/${cameraInfos.size}")
+    }
+
+    private fun cameraIdOf(info: CameraInfo): String {
+        return try {
+            Camera2CameraInfo.from(info).cameraId
+        } catch (_: Exception) {
+            info.toString()
+        }
+    }
+
+    private fun analyzeFrame(imageProxy: ImageProxy) {
+        if (analyzingPaused.get()) {
+            imageProxy.close()
+            return
+        }
+        val mediaImage = imageProxy.image
+        if (mediaImage == null) {
+            imageProxy.close()
+            return
+        }
+        // 缓存当前帧供截图
+        try {
+            val nv21 = yuv420888ToNv21(imageProxy)
+            synchronized(frameLock) {
+                latestFrameBytes = nv21
+                latestFrameWidth = imageProxy.width
+                latestFrameHeight = imageProxy.height
+                latestFrameRotation = imageProxy.imageInfo.rotationDegrees
+            }
+        } catch (_: Exception) {
+            // ignore frame cache failure
+        }
+
+        val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+        val scanner = barcodeScanner
+        if (scanner == null) {
+            imageProxy.close()
+            return
+        }
+        scanner.process(image)
+            .addOnSuccessListener { barcodes ->
+                for (b in barcodes) {
+                    val raw = b.rawValue ?: continue
+                    onDecoded(raw)
+                }
+            }
+            .addOnCompleteListener { imageProxy.close() }
+    }
+
+    private fun onDecoded(raw: String) {
+        val code = extractTrackingNo(raw)
+        if (code.isEmpty()) return
+        if (isDuplicate(code)) return
+        runOnUiThread { addRecord(code, capturePhotoFile()) }
+    }
+
+    private fun extractTrackingNo(raw: String): String {
+        val t = raw.trim()
+        if (t.isEmpty()) return ""
+        if (t.matches(Regex("^[A-Za-z0-9\\-_]+$"))) return t.uppercase()
+        val runs = Regex("[A-Za-z0-9]{6,}").findAll(t).map { it.value }.toList()
+        if (runs.isNotEmpty()) return runs.maxBy { it.length }.uppercase()
+        return t
+    }
+
+    private fun isDuplicate(code: String): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        val it = recentCodes.entries.iterator()
+        while (it.hasNext()) {
+            if (now - it.next().value > 2000) it.remove()
+        }
+        val prev = recentCodes[code]
+        recentCodes[code] = now
+        return prev != null && now - prev < 2000
+    }
+
+    private fun addManual() {
+        val value = binding.etManual.text?.toString()?.trim().orEmpty()
+        if (value.isEmpty()) {
+            showStatus(getString(R.string.please_input_tracking), true)
+            return
+        }
+        binding.etManual.setText("")
+        binding.etManual.clearFocus()
+        analyzingPaused.set(false)
+        addRecord(value, capturePhotoFile())
+    }
+
+    private fun addRecord(tracking: String, photoPath: String?) {
+        val rec = ScanRecord(nextId++, tracking, photoPath)
+        records.add(rec)
+        refreshList()
+        if (!photoPath.isNullOrBlank()) {
+            val bmp = BitmapFactory.decodeFile(photoPath)
+            if (bmp != null) {
+                binding.ivLastPhoto.setImageBitmap(bmp)
+                binding.ivLastPhoto.visibility = View.VISIBLE
+            }
+        }
+        showStatus("已添加：$tracking")
+        beepAndVibrate()
+    }
+
+    private fun deleteRecord(item: ScanRecord) {
+        records.removeAll { it.id == item.id }
+        item.photoPath?.let { File(it).delete() }
+        refreshList()
+        if (records.isEmpty()) {
+            binding.ivLastPhoto.visibility = View.GONE
+        }
+        showStatus("已删除", true)
+    }
+
+    private fun clearAll() {
+        if (records.isEmpty()) return
+        AlertDialog.Builder(this)
+            .setMessage("确定清空所有扫描记录吗？")
+            .setPositiveButton("清空") { _, _ ->
+                records.forEach { it.photoPath?.let { p -> File(p).delete() } }
+                records.clear()
+                binding.ivLastPhoto.visibility = View.GONE
+                refreshList()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun refreshList() {
+        adapter.submit(records.asReversed())
+        binding.tvCount.text = getString(R.string.record_count, records.size)
+    }
+
+    private fun submitInbound() {
+        if (records.isEmpty()) {
+            Toast.makeText(this, "当前没有扫描记录，无需入库。", Toast.LENGTH_SHORT).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setMessage("确认入库 ${records.size} 件快递吗？")
+            .setPositiveButton("确认") { _, _ -> doSubmit() }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun doSubmit() {
+        binding.btnSubmit.isEnabled = false
+        showStatus("正在入库...")
+        lifecycleScope.launch {
+            try {
+                val nos = records.map { it.trackingNo }
+                val photo = records.mapNotNull { it.photoPath }.lastOrNull()?.let { File(it) }
+                val imageUrl = withContext(Dispatchers.IO) {
+                    if (photo != null && photo.exists()) {
+                        try {
+                            app.api.uploadImage(photo)
+                        } catch (_: Exception) {
+                            null
+                        }
+                    } else null
+                }
+                val result = withContext(Dispatchers.IO) {
+                    app.api.inboundScan(nos, imageUrl)
+                }
+                val failMsg = if (result.failList.isNotEmpty()) {
+                    "\n失败 ${result.failList.size} 件：" +
+                        result.failList.joinToString("；") { "${it.trackingNo}:${it.reason}" }
+                } else ""
+                AlertDialog.Builder(this@ScannerActivity)
+                    .setTitle("入库完成")
+                    .setMessage("成功 ${result.successCount} 件$failMsg")
+                    .setPositiveButton("确定", null)
+                    .show()
+                if (result.successCount > 0) {
+                    records.forEach { it.photoPath?.let { p -> File(p).delete() } }
+                    records.clear()
+                    binding.ivLastPhoto.visibility = View.GONE
+                    refreshList()
+                    beepAndVibrate()
+                }
+            } catch (e: ApiException) {
+                if (e.code == 401) {
+                    Toast.makeText(this@ScannerActivity, "登录已失效，请重新登录", Toast.LENGTH_LONG).show()
+                    app.session.clearAuth()
+                    startActivity(Intent(this@ScannerActivity, LoginActivity::class.java))
+                    finish()
+                } else {
+                    showStatus(e.message ?: "入库失败", true)
+                    Toast.makeText(this@ScannerActivity, e.message, Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                showStatus(e.message ?: "网络异常", true)
+                Toast.makeText(this@ScannerActivity, e.message, Toast.LENGTH_LONG).show()
+            } finally {
+                binding.btnSubmit.isEnabled = true
+            }
+        }
+    }
+
+    private fun capturePhotoFile(): String? {
+        val (bytes, w, h, rotation) = synchronized(frameLock) {
+            val b = latestFrameBytes ?: return null
+            Quad(b.copyOf(), latestFrameWidth, latestFrameHeight, latestFrameRotation)
+        }
+        return try {
+            val yuv = YuvImage(bytes, ImageFormat.NV21, w, h, null)
+            val baos = ByteArrayOutputStream()
+            yuv.compressToJpeg(Rect(0, 0, w, h), 80, baos)
+            var bmp = BitmapFactory.decodeByteArray(baos.toByteArray(), 0, baos.size()) ?: return null
+            if (rotation != 0) {
+                val m = Matrix().apply { postRotate(rotation.toFloat()) }
+                bmp = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
+            }
+            // 缩小到最大 1280
+            val maxW = 1280
+            if (bmp.width > maxW) {
+                val scale = maxW.toFloat() / bmp.width
+                bmp = Bitmap.createScaledBitmap(
+                    bmp,
+                    maxW,
+                    (bmp.height * scale).toInt().coerceAtLeast(1),
+                    true
+                )
+            }
+            val file = File(cacheDir, "scan_${System.currentTimeMillis()}.jpg")
+            FileOutputStream(file).use { out ->
+                bmp.compress(Bitmap.CompressFormat.JPEG, 80, out)
+            }
+            file.absolutePath
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun beepAndVibrate() {
+        try {
+            tone?.startTone(ToneGenerator.TONE_PROP_BEEP, 150)
+        } catch (_: Exception) {
+        }
+        try {
+            val vibrator = if (android.os.Build.VERSION.SDK_INT >= 31) {
+                val vm = getSystemService(VibratorManager::class.java)
+                vm.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(VIBRATOR_SERVICE) as Vibrator
+            }
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                vibrator.vibrate(VibrationEffect.createOneShot(60, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(60)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun showStatus(text: String, error: Boolean = false) {
+        binding.tvStatus.text = text
+        binding.tvStatus.setTextColor(
+            ContextCompat.getColor(this, if (error) R.color.danger else R.color.text)
+        )
+        binding.tvStatus.visibility = View.VISIBLE
+        statusHideAt = SystemClock.elapsedRealtime() + 1800
+        binding.tvStatus.postDelayed({
+            if (SystemClock.elapsedRealtime() >= statusHideAt) {
+                binding.tvStatus.visibility = View.GONE
+            }
+        }, 1850)
+    }
+
+    private fun yuv420888ToNv21(image: ImageProxy): ByteArray {
+        val yBuffer = image.planes[0].buffer
+        val uBuffer = image.planes[1].buffer
+        val vBuffer = image.planes[2].buffer
+        val ySize = yBuffer.remaining()
+        val uSize = uBuffer.remaining()
+        val vSize = vBuffer.remaining()
+        val nv21 = ByteArray(ySize + uSize + vSize)
+        yBuffer.get(nv21, 0, ySize)
+        // NV21 = Y + VU interleaved; for many devices V plane comes first then U
+        vBuffer.get(nv21, ySize, vSize)
+        uBuffer.get(nv21, ySize + vSize, uSize)
+        return nv21
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        cameraExecutor?.shutdown()
+        barcodeScanner?.close()
+        tone?.release()
+    }
+
+    private data class Quad<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
+}

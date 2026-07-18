@@ -1,0 +1,36 @@
+# Backend
+backend/target/
+backend/uploads/
+backend/hs_err_*.log
+backend/replay_*.log
+uploads/
+
+# Frontend
+frontend-admin/node_modules/
+frontend-admin/dist/
+frontend-public/node_modules/
+frontend-public/dist/
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Local
+*.log
+.env
+.env.*
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.cxx/
+android/captures/
+*.apk
+*.aab
+*.keystore
+*.jks

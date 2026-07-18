@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>快递扫码入库</title>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+            background: #f4f6f9;
+            touch-action: manipulation;
+            padding-bottom: 80px;  /* 为底部固定栏留空间 */
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .main-container {
+            max-width: 750px;
+            margin: 0 auto;
+            padding: 0 16px;
+        }
+
+        .sticky-header {
+            position: -webkit-sticky;
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            background: #f4f6f9;
+            padding-top: 10px;
+            padding-bottom: 8px;
+            margin-bottom: 14px;
+        }
+
+        .page-title {
+            text-align: center;
+            color: #1e293b;
+            font-size: 18px;
+            font-weight: 600;
+            margin: 0 0 12px 0;
+        }
+
+        .camera-card {
+            width: 100%;
+            height: 320px;
+            background: #000;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            position: relative;
+        }
+        #reader {
+            width: 100%;
+            height: 100%;
+        }
+        #reader video {
+            width: 100% !important;
+            height: 100% !important;
+            object-fit: cover;
+        }
+
+        .camera-launch-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(15,23,42,0.92);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            color: #fff;
+            text-align: center;
+            padding: 20px;
+            transition: opacity 0.4s;
+            border-radius: 16px;
+        }
+        .camera-launch-overlay.hidden {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+        .camera-icon {
+            width: 56px;
+            height: 56px;
+            stroke: #fff;
+            stroke-width: 1.5;
+            fill: none;
+            margin-bottom: 12px;
+        }
+        .camera-launch-overlay h3 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+        .camera-launch-overlay p {
+            font-size: 13px;
+            color: #cbd5e1;
+            margin-bottom: 18px;
+        }
+        .camera-launch-btn {
+            background: #3b82f6;
+            color: #fff;
+            border: none;
+            padding: 12px 32px;
+            border-radius: 30px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(59,130,246,0.4);
+        }
+        .camera-launch-btn.loading {
+            pointer-events: none;
+            opacity: 0.7;
+            background: #64748b;
+        }
+        .camera-error {
+            color: #fca5a5;
+            font-size: 12px;
+            margin-top: 10px;
+            display: none;
+            max-width: 260px;
+        }
+        .camera-retry {
+            display: none;
+            background: transparent;
+            border: 1.5px solid #fca5a5;
+            color: #fca5a5;
+            padding: 6px 18px;
+            border-radius: 20px;
+            font-size: 13px;
+            cursor: pointer;
+            margin-top: 8px;
+        }
+        .camera-error.show,
+        .camera-retry.show {
+            display: block;
+        }
+        .camera-retry.show {
+            display: inline-block;
+        }
+
+        .scan-status {
+            position: absolute;
+            bottom: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.6);
+            color: #fff;
+            padding: 4px 16px;
+            border-radius: 30px;
+            font-size: 13px;
+            backdrop-filter: blur(6px);
+            white-space: nowrap;
+            z-index: 5;
+            pointer-events: none;
+        }
+
+        #photo-preview {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 90px;
+            height: 120px;
+            border-radius: 10px;
+            overflow: hidden;
+            border: 2px solid rgba(255,255,255,0.6);
+            display: none;
+            z-index: 15;
+            cursor: pointer;
+            background: #1e293b;
+        }
+        #photo-preview img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .photo-overlay {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 28px;
+            background: rgba(59,130,246,0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: 11px;
+            font-weight: 500;
+            backdrop-filter: blur(4px);
+            pointer-events: none;
+        }
+
+        .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            background: #fff;
+            padding: 12px 16px;
+            border-radius: 12px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+            margin-bottom: 16px;
+        }
+        .toolbar .manual-group {
+            display: flex;
+            gap: 6px;
+            flex: 1;
+            flex-wrap: wrap;
+        }
+        .toolbar input {
+            flex: 1;
+            min-width: 130px;
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            font-size: 14px;
+            background: #f8fafc;
+            transition: border 0.2s;
+        }
+        .toolbar input:focus {
+            outline: none;
+            border-color: #3b82f6;
+            background: #fff;
+        }
+        .toolbar button {
+            background: #3b82f6;
+            color: #fff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            cursor: pointer;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .toolbar .btn-outline {
+            background: #e2e8f0;
+            color: #1e293b;
+        }
+        .btn-camera-switch {
+            background: #0f172a !important;
+            color: #e2e8f0 !important;
+            font-size: 13px;
+            display: none;
+        }
+
+        .stats-panel {
+            background: #fff;
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+            margin-bottom: 16px;
+        }
+        .section-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: #1e293b;
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #eef2f6;
+            display: flex;
+            justify-content: space-between;
+        }
+        .stats-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 12px;
+        }
+        .stats-table th,
+        .stats-table td {
+            padding: 8px 6px;
+            text-align: left;
+            border-bottom: 1px solid #f1f5f9;
+            font-size: 14px;
+        }
+        .stats-table .total-row {
+            font-weight: 600;
+            background: #f8fafc;
+        }
+
+        .record-list {
+            list-style: none;
+            max-height: 360px;
+            overflow-y: auto;
+        }
+        .record-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 4px;
+            border-bottom: 1px solid #f1f5f9;
+            font-size: 14px;
+        }
+        .record-thumb {
+            width: 44px;
+            height: 44px;
+            border-radius: 8px;
+            object-fit: cover;
+            border: 1px solid #e2e8f0;
+            flex-shrink: 0;
+            background: #f8fafc;
+            cursor: pointer;
+        }
+        .record-info {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .company-tag {
+            background: #eef2f6;
+            padding: 0 8px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-weight: 500;
+            display: inline-block;
+            width: fit-content;
+        }
+        .tracking-number {
+            color: #475569;
+            font-family: monospace;
+            font-size: 13px;
+            word-break: break-all;
+        }
+        .del-btn {
+            background: none;
+            border: none;
+            color: #94a3b8;
+            font-size: 18px;
+            cursor: pointer;
+            padding: 4px;
+            flex-shrink: 0;
+        }
+        .empty-tip {
+            color: #94a3b8;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .image-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.85);
+            z-index: 200;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+        .image-overlay.show {
+            display: flex;
+        }
+        .image-overlay img {
+            max-width: 90%;
+            max-height: 90%;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+        }
+
+        .bottom-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            background: #fff;
+            border-top: 1px solid #e2e8f0;
+            padding: 12px 16px;
+            padding-bottom: max(12px, env(safe-area-inset-bottom));
+            display: flex;
+            justify-content: center;
+            z-index: 100;
+        }
+        .submit-btn {
+            background: #3b82f6;
+            color: #fff;
+            border: none;
+            border-radius: 12px;
+            font-size: 18px;
+            font-weight: 600;
+            padding: 14px 0;
+            width: 100%;
+            max-width: 400px;
+            letter-spacing: 2px;
+            cursor: pointer;
+        }
+
+        @media (max-width: 480px) {
+            .camera-card {
+                height: 280px;
+            }
+            #photo-preview {
+                width: 75px;
+                height: 100px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="image-overlay" id="image-overlay">
+        <img id="image-overlay-img" src="" alt="放大图片">
+    </div>
+
+    <div class="main-container">
+        <div class="sticky-header">
+            <div class="page-title">快递扫码入库</div>
+            <div class="camera-card" id="camera-card">
+                <div id="reader"></div>
+                <div class="scan-status" id="scan-status"></div>
+                <div id="photo-preview">
+                    <img id="photo-img" src="" alt="包裹照片">
+                    <div class="photo-overlay">预览/重拍</div>
+                </div>
+
+                <div class="camera-launch-overlay" id="launch-overlay">
+                    <svg class="camera-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                        <circle cx="12" cy="13" r="4"/>
+                    </svg>
+                    <h3>启动摄像头扫码</h3>
+                    <p>点击后授权摄像头</p>
+                    <button class="camera-launch-btn" id="launch-btn">启动摄像头</button>
+                    <div class="camera-error" id="launch-error"></div>
+                    <button class="camera-retry" id="launch-retry">重试</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="toolbar">
+            <div class="manual-group">
+                <input type="text" id="manual-input" placeholder="输入快递单号" autocomplete="off">
+                <button id="manual-add-btn">添加</button>
+            </div>
+            <button id="switch-camera-btn" class="btn-camera-switch">切换镜头</button>
+            <button id="clear-all-btn" class="btn-outline">清空</button>
+        </div>
+
+        <div class="stats-panel">
+            <div class="section-title">快递统计</div>
+            <table class="stats-table">
+                <thead><tr><th>快递名称</th><th>登记数量</th></tr></thead>
+                <tbody id="statsBody"><tr><td colspan="2" style="color:#94a3b8;text-align:center;">暂无数据</td></tr></tbody>
+                <tfoot><tr class="total-row"><td>合计</td><td id="totalCount">0</td></tr></tfoot>
+            </table>
+            <div class="section-title">扫描记录 <span id="recordCount">0</span></div>
+            <ul class="record-list" id="recordList"><li class="empty-tip">暂无记录</li></ul>
+        </div>
+    </div>
+
+    <div class="bottom-bar">
+        <button class="submit-btn" id="submit-btn">入库</button>
+    </div>
+
+    <script>
+        (function() {
+            const { Html5Qrcode, Html5QrcodeSupportedFormats } = window;
+            const readerDiv = document.getElementById('reader');
+            const scanStatus = document.getElementById('scan-status');
+            const launchOverlay = document.getElementById('launch-overlay');
+            const launchBtn = document.getElementById('launch-btn');
+            const launchError = document.getElementById('launch-error');
+            const launchRetry = document.getElementById('launch-retry');
+            const switchCameraBtn = document.getElementById('switch-camera-btn');
+            const manualInput = document.getElementById('manual-input');
+            const manualAddBtn = document.getElementById('manual-add-btn');
+            const clearAllBtn = document.getElementById('clear-all-btn');
+            const statsBody = document.getElementById('statsBody');
+            const totalCountEl = document.getElementById('totalCount');
+            const recordList = document.getElementById('recordList');
+            const recordCount = document.getElementById('recordCount');
+            const submitBtn = document.getElementById('submit-btn');
+            const photoPreview = document.getElementById('photo-preview');
+            const photoImg = document.getElementById('photo-img');
+            const imageOverlay = document.getElementById('image-overlay');
+            const imageOverlayImg = document.getElementById('image-overlay-img');
+
+            let records = [];
+            let html5QrCode = null;
+            let scannerRunning = false;
+            let rearCameras = [];
+            let currentCameraIndex = 0;
+            let currentPhotoIndex = -1;
+            let lastScannedCode = null;
+            let scanCooldown = false;
+            let cooldownTimer = null;
+
+            function cleanTracking(raw) {
+                return raw.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+            }
+
+            function detectCompany(tracking) {
+                const t = tracking.trim();
+                if (/^SF\d{12}$/i.test(t)) return '顺丰速运';
+                if (/^YT\d{12}$/i.test(t)) return '圆通快递';
+                if (/^JD\d{12}$/i.test(t)) return '京东快递';
+                if (/^JT\d{12}$/i.test(t)) return '极兔速递';
+                if (/^DPK\d{12}$/i.test(t)) return '德邦快递';
+                if (/^B\d{12}$/i.test(t)) return '百世快递';
+                if (/^EA\d{9,12}$/i.test(t)) return 'EMS';
+                if (/^4\d{11}$/.test(t)) return '申通快递';
+                if (/^777\d{12}$/.test(t)) return '申通快递';
+                if (/^[78]\d{12}$/.test(t)) return '中通快递';
+                if (/^9\d{12}$/.test(t)) return '中国邮政';
+                if (/^1[02]\d{11}$/.test(t)) return '韵达快递';
+                if (/^3\d{11}$/.test(t)) return '极兔速递';
+                if (/^88\d{10}$/.test(t)) return '圆通快递';
+                if (/^\d{12,15}$/.test(t)) return '未知快递';
+                return null;
+            }
+
+            function isValid(tracking) {
+                return detectCompany(tracking) !== null;
+            }
+
+            function capturePhoto() {
+                const video = document.querySelector('#reader video');
+                if (!video || video.readyState < 2) return null;
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                canvas.getContext('2d').drawImage(video, 0, 0);
+                return canvas.toDataURL('image/jpeg', 0.9);
+            }
+
+            function showPhoto(dataUrl, index) {
+                if (!dataUrl) { hidePhoto(); return; }
+                photoImg.src = dataUrl;
+                photoPreview.style.display = 'block';
+                currentPhotoIndex = index;
+            }
+            function hidePhoto() {
+                photoPreview.style.display = 'none';
+                photoImg.src = '';
+                currentPhotoIndex = -1;
+            }
+            photoPreview.addEventListener('click', () => {
+                if (currentPhotoIndex >= 0 && currentPhotoIndex < records.length) {
+                    records.splice(currentPhotoIndex, 1);
+                    hidePhoto();
+                    renderStats();
+                    setStatus('已删除，请重新扫描', '#fca5a5');
+                }
+            });
+
+            function showImageFullscreen(src) {
+                imageOverlayImg.src = src;
+                imageOverlay.classList.add('show');
+            }
+            function hideImageFullscreen() {
+                imageOverlay.classList.remove('show');
+                imageOverlayImg.src = '';
+            }
+            imageOverlay.addEventListener('click', hideImageFullscreen);
+
+            function addRecord(rawTracking, bypassCooldown = false) {
+                const cleaned = cleanTracking(rawTracking);
+                console.log('原始:', rawTracking, '清洗:', cleaned);
+
+                const company = detectCompany(cleaned);
+                if (!company) {
+                    setStatus('该单号不是快递单号', '#fca5a5');
+                    return;
+                }
+                if (!bypassCooldown && scanCooldown) return;
+
+                const photo = capturePhoto();
+                records.push({ company, tracking: cleaned, photo });
+                const newIndex = records.length - 1;
+                showPhoto(photo, newIndex);
+                renderStats();
+                manualInput.value = '';
+                setStatus(`已添加：${company}`, '#86efac');
+
+                if (!bypassCooldown) {
+                    lastScannedCode = cleaned;
+                    scanCooldown = true;
+                    if (cooldownTimer) clearTimeout(cooldownTimer);
+                    cooldownTimer = setTimeout(() => {
+                        scanCooldown = false;
+                        lastScannedCode = null;
+                    }, 3000);
+                }
+            }
+
+            function setStatus(text, color = '#fff') {
+                scanStatus.textContent = text;
+                scanStatus.style.color = color;
+                clearTimeout(scanStatus._timer);
+                scanStatus._timer = setTimeout(() => {
+                    scanStatus.textContent = '';
+                }, 2000);
+            }
+
+            function renderStats() {
+                const map = new Map();
+                records.forEach(r => {
+                    const c = r.company;
+                    if (!map.has(c)) map.set(c, { count: 0 });
+                    map.get(c).count++;
+                });
+                let html = '';
+                let total = 0;
+                if (map.size === 0) {
+                    html = '<tr><td colspan="2" style="color:#94a3b8;text-align:center;">暂无数据</td></tr>';
+                } else {
+                    for (let [c, e] of map) {
+                        html += `<tr><td>${c}</td><td>${e.count}</td></tr>`;
+                        total += e.count;
+                    }
+                }
+                statsBody.innerHTML = html;
+                totalCountEl.textContent = total;
+
+                if (records.length === 0) {
+                    recordList.innerHTML = '<li class="empty-tip">暂无记录</li>';
+                } else {
+                    recordList.innerHTML = records.map((r, i) => `
+                        <li class="record-item">
+                            ${r.photo
+                                ? `<img src="${r.photo}" class="record-thumb" alt="包裹照片" data-fullsrc="${r.photo}">`
+                                : `<div class="record-thumb" style="display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:12px;">无图</div>`}
+                            <div class="record-info">
+                                <span class="company-tag">${r.company}</span>
+                                <span class="tracking-number">${r.tracking}</span>
+                            </div>
+                            <button class="del-btn" data-index="${i}">×</button>
+                        </li>
+                    `).join('');
+
+                    document.querySelectorAll('.record-thumb').forEach(img => {
+                        img.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            const fullSrc = img.getAttribute('data-fullsrc');
+                            if (fullSrc) showImageFullscreen(fullSrc);
+                        });
+                    });
+
+                    document.querySelectorAll('.del-btn').forEach(b => {
+                        b.addEventListener('click', (e) => {
+                            const i = parseInt(e.target.dataset.index);
+                            records.splice(i, 1);
+                            if (i === currentPhotoIndex) hidePhoto();
+                            else if (currentPhotoIndex > i) currentPhotoIndex--;
+                            renderStats();
+                        });
+                    });
+                }
+                recordCount.textContent = `共 ${records.length} 条`;
+            }
+
+            // ---------- 摄像头管理 ----------
+            async function getRearCameras() {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                rearCameras = devices.filter(d => d.kind === 'videoinput' && d.label.toLowerCase().includes('back'));
+                if (rearCameras.length === 0) rearCameras = devices.filter(d => d.kind === 'videoinput');
+                return rearCameras;
+            }
+
+            async function selectBestCamera() {
+                const cameras = await getRearCameras();
+                if (cameras.length <= 1) return cameras;
+                const wideKeywords = ['广角', 'wide', 'ultra'];
+                const wideCam = cameras.find(c => wideKeywords.some(k => c.label.toLowerCase().includes(k)));
+                if (wideCam) {
+                    const idx = cameras.indexOf(wideCam);
+                    if (idx > 0) {
+                        const tmp = cameras[0];
+                        cameras[0] = cameras[idx];
+                        cameras[idx] = tmp;
+                    }
+                } else if (cameras.length >= 2) {
+                    const tmp = cameras[0];
+                    cameras[0] = cameras[1];
+                    cameras[1] = tmp;
+                }
+                return cameras;
+            }
+
+            async function stopScanner() {
+                if (html5QrCode) {
+                    try { await html5QrCode.stop(); await html5QrCode.clear(); } catch (e) {}
+                    html5QrCode = null;
+                }
+                scannerRunning = false;
+            }
+
+            async function startScanner(deviceId) {
+                await stopScanner();
+                const config = {
+                    fps: 20,
+                    qrbox: { width: 250, height: 100 },
+                    aspectRatio: 1.6,
+                    formatsToSupport: [
+                        Html5QrcodeSupportedFormats.EAN_13,
+                        Html5QrcodeSupportedFormats.EAN_8,
+                        Html5QrcodeSupportedFormats.UPC_A,
+                        Html5QrcodeSupportedFormats.CODE_128,
+                        Html5QrcodeSupportedFormats.CODE_39,
+                        Html5QrcodeSupportedFormats.QR_CODE
+                    ],
+                };
+                html5QrCode = new Html5Qrcode("reader");
+                const cameraConstraints = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'environment' };
+                await html5QrCode.start(cameraConstraints, config,
+                    (decodedText) => addRecord(decodedText),
+                    (err) => {}
+                );
+                scannerRunning = true;
+            }
+
+            async function startCamera() {
+                launchBtn.classList.add('loading');
+                launchBtn.textContent = '请求中...';
+                try {
+                    const cameras = await selectBestCamera();
+                    rearCameras = cameras;
+                    if (cameras.length > 1) {
+                        switchCameraBtn.style.display = 'inline-block';
+                        currentCameraIndex = 0;
+                        await startScanner(cameras[0].deviceId);
+                    } else {
+                        switchCameraBtn.style.display = 'none';
+                        await startScanner(null);
+                    }
+                    launchOverlay.classList.add('hidden');
+                } catch (err) {
+                    launchBtn.classList.remove('loading');
+                    launchBtn.textContent = '重新启动';
+                    let msg = '启动失败：';
+                    if (err.name === 'NotAllowedError') msg = '权限被拒绝';
+                    else if (err.name === 'NotFoundError') msg = '未找到摄像头';
+                    else msg += err.message;
+                    launchError.textContent = msg;
+                    launchError.classList.add('show');
+                    launchRetry.classList.add('show');
+                }
+            }
+
+            switchCameraBtn.addEventListener('click', async () => {
+                if (rearCameras.length <= 1) return;
+                currentCameraIndex = (currentCameraIndex + 1) % rearCameras.length;
+                try {
+                    await startScanner(rearCameras[currentCameraIndex].deviceId);
+                } catch (e) {
+                    setStatus('切换失败', '#fca5a5');
+                }
+            });
+
+            launchBtn.addEventListener('click', startCamera);
+            launchRetry.addEventListener('click', startCamera);
+
+            // ---------- 手动输入及自动滚动优化 ----------
+            manualInput.addEventListener('input', () => {
+                const val = cleanTracking(manualInput.value);
+                const company = detectCompany(val);
+                if (company) {
+                    setStatus('识别为: ' + company, '#a7f3d0');
+                } else if (val) {
+                    setStatus('该单号不是快递单号', '#fca5a5');
+                } else {
+                    setStatus('');
+                }
+            });
+
+            // 键盘弹出时自动滚动，使输入框完全可见
+            manualInput.addEventListener('focus', () => {
+                setTimeout(() => {
+                    const rect = manualInput.getBoundingClientRect();
+                    const stickyHeader = document.querySelector('.sticky-header');
+                    const bottomBar = document.querySelector('.bottom-bar');
+                    const topOffset = stickyHeader ? stickyHeader.offsetHeight : 0;
+                    const bottomOffset = bottomBar ? bottomBar.offsetHeight : 0;
+                    const gap = 10;
+
+                    if (rect.top < topOffset + gap) {
+                        // 输入框被顶部遮挡，向下滚动
+                        window.scrollBy(0, rect.top - topOffset - gap);
+                    } else if (rect.bottom > window.innerHeight - bottomOffset - gap) {
+                        // 输入框被底部遮挡，向上滚动
+                        window.scrollBy(0, rect.bottom - (window.innerHeight - bottomOffset - gap));
+                    }
+                }, 350); // 等待键盘动画完成
+            });
+
+            manualAddBtn.addEventListener('click', () => {
+                if (manualInput.value) {
+                    addRecord(manualInput.value, true);
+                }
+            });
+            manualInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') manualAddBtn.click();
+            });
+
+            clearAllBtn.addEventListener('click', () => {
+                if (records.length && confirm('清空全部记录？')) {
+                    records = [];
+                    hidePhoto();
+                    renderStats();
+                }
+            });
+            submitBtn.addEventListener('click', () => {
+                if (records.length === 0) return alert('没有可入库的快递');
+                if (confirm(`确认入库 ${records.length} 件快递吗？`)) {
+                    alert('入库成功！');
+                    records = [];
+                    hidePhoto();
+                    renderStats();
+                }
+            });
+
+            window.addEventListener('beforeunload', async () => {
+                await stopScanner();
+            });
+
+            renderStats();
+        })();
+    </script>
+</body>
+</html>

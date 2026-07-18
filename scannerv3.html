@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>快递扫码入库</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+            background: #f4f6f9;
+            touch-action: manipulation;
+            padding-bottom: 80px;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .main-container {
+            max-width: 750px;
+            margin: 0 auto;
+            padding: 0 16px;
+        }
+
+        /* 顶部固定区域：标题 + 摄像头 + 手动输入栏 */
+        .sticky-header {
+            position: -webkit-sticky;
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            background: #f4f6f9;
+            padding: 10px 0 12px 0;
+            margin-bottom: 16px;
+        }
+
+        .page-title {
+            text-align: center;
+            color: #1e293b;
+            font-size: 18px;
+            font-weight: 600;
+            margin: 0 0 12px 0;
+        }
+
+        .camera-card {
+            width: 100%;
+            height: 320px;
+            background: #000;
+            border-radius: 16px;
+            overflow: hidden;
+            position: relative;
+            margin-bottom: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+        }
+        #cam-video {
+            width: 100%;
+            height: 100%;
+            /* cover 铺满取景区，不留黑边 */
+            object-fit: cover;
+            background: #000;
+            display: block;
+        }
+
+        /* 启动覆盖层 */
+        .camera-launch-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(15,23,42,0.92);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            color: #fff;
+            text-align: center;
+            padding: 20px;
+            transition: opacity 0.4s;
+            border-radius: 16px;
+        }
+        .camera-launch-overlay.hidden {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+        .camera-icon {
+            width: 56px;
+            height: 56px;
+            stroke: #fff;
+            stroke-width: 1.5;
+            fill: none;
+            margin-bottom: 12px;
+        }
+        .camera-launch-overlay h3 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+        .camera-launch-overlay p {
+            font-size: 13px;
+            color: #cbd5e1;
+            margin-bottom: 18px;
+        }
+        .camera-launch-btn {
+            background: #3b82f6;
+            color: #fff;
+            border: none;
+            padding: 12px 32px;
+            border-radius: 30px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(59,130,246,0.4);
+        }
+        .camera-launch-btn.loading {
+            pointer-events: none;
+            opacity: 0.7;
+            background: #64748b;
+        }
+        .camera-error {
+            color: #fca5a5;
+            font-size: 12px;
+            margin-top: 10px;
+            display: none;
+            max-width: 260px;
+        }
+        .camera-retry {
+            display: none;
+            background: transparent;
+            border: 1.5px solid #fca5a5;
+            color: #fca5a5;
+            padding: 6px 18px;
+            border-radius: 20px;
+            font-size: 13px;
+            cursor: pointer;
+            margin-top: 8px;
+        }
+        .camera-error.show {
+            display: block;
+        }
+        .camera-retry.show {
+            display: inline-block;
+        }
+
+        .scan-status {
+            position: absolute;
+            bottom: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.6);
+            color: #fff;
+            padding: 4px 16px;
+            border-radius: 30px;
+            font-size: 13px;
+            backdrop-filter: blur(6px);
+            white-space: nowrap;
+            z-index: 5;
+            pointer-events: none;
+            display: none;
+        }
+        .scan-status.show {
+            display: block;
+        }
+
+        #photo-preview {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 90px;
+            height: 120px;
+            border-radius: 10px;
+            overflow: hidden;
+            border: 2px solid rgba(255,255,255,0.6);
+            display: none;
+            z-index: 15;
+            cursor: pointer;
+            background: #1e293b;
+        }
+        #photo-preview img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .photo-overlay {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 28px;
+            background: rgba(59,130,246,0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: 11px;
+            font-weight: 500;
+            backdrop-filter: blur(4px);
+            pointer-events: none;
+        }
+
+        /* 手动输入工具栏 */
+        .toolbar {
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 8px;
+            align-items: center;
+            background: #fff;
+            padding: 10px 12px;
+            border-radius: 12px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+            margin: 0;
+        }
+        .toolbar input {
+            flex: 1;
+            min-width: 0;
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            font-size: 14px;
+            background: #f8fafc;
+            transition: border 0.2s;
+        }
+        .toolbar input:focus {
+            outline: none;
+            border-color: #3b82f6;
+            background: #fff;
+        }
+        .toolbar button {
+            background: #3b82f6;
+            color: #fff;
+            border: none;
+            padding: 8px 14px;
+            border-radius: 8px;
+            font-size: 14px;
+            cursor: pointer;
+            font-weight: 500;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .toolbar .btn-outline {
+            background: #e2e8f0;
+            color: #1e293b;
+        }
+        .btn-camera-switch {
+            background: #0f172a !important;
+            color: #e2e8f0 !important;
+            font-size: 13px;
+            display: none;
+        }
+
+        /* 扫描记录面板 */
+        .records-panel {
+            background: #fff;
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+            margin-bottom: 16px;
+        }
+        .section-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: #1e293b;
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #eef2f6;
+            display: flex;
+            justify-content: space-between;
+        }
+        .record-list {
+            list-style: none;
+            max-height: 360px;
+            overflow-y: auto;
+        }
+        .record-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 4px;
+            border-bottom: 1px solid #f1f5f9;
+            font-size: 14px;
+        }
+        .record-thumb {
+            width: 44px;
+            height: 44px;
+            border-radius: 8px;
+            object-fit: cover;
+            border: 1px solid #e2e8f0;
+            flex-shrink: 0;
+            background: #f8fafc;
+            cursor: pointer;
+        }
+        .record-thumb.placeholder {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #94a3b8;
+            font-size: 12px;
+            cursor: default;
+        }
+        .record-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .tracking-number {
+            color: #475569;
+            font-family: 'SFMono-Regular', Consolas, monospace;
+            font-size: 14px;
+            word-break: break-all;
+        }
+        .del-btn {
+            background: none;
+            border: none;
+            color: #94a3b8;
+            font-size: 18px;
+            cursor: pointer;
+            padding: 4px 8px;
+            flex-shrink: 0;
+        }
+        .empty-tip {
+            color: #94a3b8;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .image-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.85);
+            z-index: 200;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+        .image-overlay.show {
+            display: flex;
+        }
+        .image-overlay img {
+            max-width: 90%;
+            max-height: 90%;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+        }
+
+        .bottom-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            background: #fff;
+            border-top: 1px solid #e2e8f0;
+            padding: 12px 16px;
+            padding-bottom: max(12px, env(safe-area-inset-bottom));
+            display: flex;
+            justify-content: center;
+            z-index: 100;
+        }
+        .submit-btn {
+            background: #3b82f6;
+            color: #fff;
+            border: none;
+            border-radius: 12px;
+            font-size: 18px;
+            font-weight: 600;
+            padding: 14px 0;
+            width: 100%;
+            max-width: 400px;
+            letter-spacing: 2px;
+            cursor: pointer;
+        }
+
+        @media (max-width: 480px) {
+            .camera-card {
+                height: 280px;
+            }
+            #photo-preview {
+                width: 75px;
+                height: 100px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="image-overlay" id="image-overlay">
+        <img id="image-overlay-img" src="" alt="放大图片">
+    </div>
+
+    <div class="main-container">
+        <div class="sticky-header">
+            <div class="page-title">快递扫码入库</div>
+            <div class="camera-card" id="camera-card">
+                <video id="cam-video" playsinline muted autoplay></video>
+                <div class="scan-status" id="scan-status"></div>
+                <div id="photo-preview">
+                    <img id="photo-img" src="" alt="包裹照片">
+                    <div class="photo-overlay">点击删除该条</div>
+                </div>
+
+                <div class="camera-launch-overlay" id="launch-overlay">
+                    <svg class="camera-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                        <circle cx="12" cy="13" r="4"/>
+                    </svg>
+                    <h3>启动摄像头扫码</h3>
+                    <p>点击后授权摄像头</p>
+                    <button class="camera-launch-btn" id="launch-btn">启动摄像头</button>
+                    <div class="camera-error" id="launch-error"></div>
+                    <button class="camera-retry" id="launch-retry">重试</button>
+                </div>
+            </div>
+
+            <div class="toolbar">
+                <input type="text" id="manual-input" placeholder="输入快递单号" autocomplete="off">
+                <button id="manual-add-btn">添加</button>
+                <button id="switch-camera-btn" class="btn-camera-switch">切换镜头</button>
+                <button id="clear-all-btn" class="btn-outline">清空</button>
+            </div>
+        </div>
+
+        <div class="records-panel">
+            <div class="section-title">扫描记录 <span id="record-count">共 0 条</span></div>
+            <ul class="record-list" id="record-list"><li class="empty-tip">暂无记录</li></ul>
+        </div>
+    </div>
+
+    <div class="bottom-bar">
+        <button class="submit-btn" id="submit-btn">入库</button>
+    </div>
+
+    <script>
+    (function() {
+        'use strict';
+
+        /* ==================== DOM ==================== */
+        const video = document.getElementById('cam-video');
+        const launchOverlay = document.getElementById('launch-overlay');
+        const launchBtn = document.getElementById('launch-btn');
+        const launchError = document.getElementById('launch-error');
+        const launchRetry = document.getElementById('launch-retry');
+        const scanStatus = document.getElementById('scan-status');
+        const photoPreview = document.getElementById('photo-preview');
+        const photoImg = document.getElementById('photo-img');
+        const manualInput = document.getElementById('manual-input');
+        const manualAddBtn = document.getElementById('manual-add-btn');
+        const switchCameraBtn = document.getElementById('switch-camera-btn');
+        const clearAllBtn = document.getElementById('clear-all-btn');
+        const recordList = document.getElementById('record-list');
+        const recordCount = document.getElementById('record-count');
+        const submitBtn = document.getElementById('submit-btn');
+        const imageOverlay = document.getElementById('image-overlay');
+        const imageOverlayImg = document.getElementById('image-overlay-img');
+
+        /* ==================== 状态 ==================== */
+        let records = [];              // { id, tracking, photo }
+        let nextId = 1;
+        let previewRecordId = null;    // 右上角缩略图对应的记录 id
+
+        let stream = null;             // 当前 MediaStream
+        let cameras = [];              // 可用后置摄像头列表（主摄排第一）
+        let cameraIndex = 0;
+        let running = false;           // 识别循环是否运行
+
+        /* ==================== 识别引擎 ====================
+         * 优先使用浏览器原生 BarcodeDetector（硬件加速，最快）。
+         * 不支持时自动加载 ZXing 作为兜底（iOS Safari 等）。
+         */
+        const BD_FORMATS = ['code_128', 'code_39', 'code_93', 'ean_13', 'ean_8',
+                            'upc_a', 'upc_e', 'itf', 'codabar', 'qr_code', 'data_matrix'];
+        let engine = null;             // { type:'native', detector } | { type:'zxing', reader }
+        let workCanvas = null;         // ZXing 用的工作画布
+
+        async function initEngine() {
+            if (engine) return engine;
+            if ('BarcodeDetector' in window) {
+                try {
+                    const supported = await window.BarcodeDetector.getSupportedFormats();
+                    const formats = BD_FORMATS.filter(f => supported.includes(f));
+                    if (formats.length) {
+                        engine = { type: 'native', detector: new window.BarcodeDetector({ formats }) };
+                        return engine;
+                    }
+                } catch (e) { /* 继续走 ZXing */ }
+            }
+            await loadScript('https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js');
+            if (!window.ZXing) throw new Error('识别引擎加载失败，请检查网络');
+            const Z = window.ZXing;
+            const hints = new Map();
+            hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [
+                Z.BarcodeFormat.CODE_128, Z.BarcodeFormat.CODE_39, Z.BarcodeFormat.CODE_93,
+                Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8,
+                Z.BarcodeFormat.UPC_A, Z.BarcodeFormat.UPC_E, Z.BarcodeFormat.ITF,
+                Z.BarcodeFormat.CODABAR, Z.BarcodeFormat.QR_CODE, Z.BarcodeFormat.DATA_MATRIX
+            ]);
+            hints.set(Z.DecodeHintType.TRY_HARDER, true);
+            const reader = new Z.MultiFormatReader();
+            reader.setHints(hints);
+            workCanvas = document.createElement('canvas');
+            engine = { type: 'zxing', reader };
+            return engine;
+        }
+
+        function loadScript(src) {
+            return new Promise((resolve, reject) => {
+                const s = document.createElement('script');
+                s.src = src;
+                s.onload = resolve;
+                s.onerror = () => reject(new Error('脚本加载失败'));
+                document.head.appendChild(s);
+            });
+        }
+
+        function zxingDecodeFrame() {
+            const Z = window.ZXing;
+            const vw = video.videoWidth, vh = video.videoHeight;
+            if (!vw || !vh) return null;
+            // 限制解码分辨率，兼顾灵敏度与手机性能
+            const targetW = Math.min(vw, 1024);
+            const targetH = Math.round(vh * targetW / vw);
+            workCanvas.width = targetW;
+            workCanvas.height = targetH;
+            workCanvas.getContext('2d', { willReadFrequently: true })
+                      .drawImage(video, 0, 0, targetW, targetH);
+            try {
+                const source = new Z.HTMLCanvasElementLuminanceSource(workCanvas);
+                const bitmap = new Z.BinaryBitmap(new Z.HybridBinarizer(source));
+                const result = engine.reader.decodeWithState(bitmap);
+                return result ? result.getText() : null;
+            } catch (e) {
+                return null; // NotFoundException = 本帧无码，正常
+            }
+        }
+
+        /* ==================== 识别主循环 ==================== */
+        let detectBusy = false;
+        let loopTimer = null;
+
+        function startDetectLoop() {
+            stopDetectLoop();
+            running = true;
+            const interval = engine.type === 'native' ? 66 : 120; // native ≈15次/秒
+            loopTimer = setInterval(async () => {
+                if (!running || detectBusy || video.readyState < 2) return;
+                // 手动输入时暂停识别，避免解码占用主线程导致打字卡顿
+                if (document.activeElement === manualInput) return;
+                detectBusy = true;
+                try {
+                    if (engine.type === 'native') {
+                        const found = await engine.detector.detect(video);
+                        for (const item of found) {
+                            if (item.rawValue) onDecoded(item.rawValue);
+                        }
+                    } else {
+                        const text = zxingDecodeFrame();
+                        if (text) onDecoded(text);
+                    }
+                } catch (e) { /* 单帧失败忽略 */ }
+                detectBusy = false;
+            }, interval);
+        }
+
+        function stopDetectLoop() {
+            running = false;
+            if (loopTimer) { clearInterval(loopTimer); loopTimer = null; }
+        }
+
+        /* ==================== 单号提取与去重 ==================== */
+        // 从解码文本中提取单号：纯字母数字直接用；
+        // 若是 URL/JSON 等复杂内容，提取其中最长的字母数字串（>=6位）
+        function extractTrackingNo(raw) {
+            const t = String(raw || '').trim();
+            if (!t) return '';
+            if (/^[A-Za-z0-9\-_]+$/.test(t)) return t.toUpperCase();
+            const runs = t.match(/[A-Za-z0-9]{6,}/g);
+            if (runs && runs.length) {
+                runs.sort((a, b) => b.length - a.length);
+                return runs[0].toUpperCase();
+            }
+            return t;
+        }
+
+        // 约2秒内同一单号不重复录入
+        const recentCodes = new Map(); // code -> timestamp
+        function isDuplicate(code) {
+            const now = Date.now();
+            for (const [k, ts] of recentCodes) {
+                if (now - ts > 2000) recentCodes.delete(k);
+            }
+            const prev = recentCodes.get(code);
+            recentCodes.set(code, now);
+            return prev !== undefined && (now - prev) < 2000;
+        }
+
+        function onDecoded(raw) {
+            const code = extractTrackingNo(raw);
+            if (!code) return;
+            if (isDuplicate(code)) return;
+            addRecord(code);
+        }
+
+        /* ==================== 记录管理 ==================== */
+        function capturePhoto() {
+            if (!stream || video.readyState < 2 || !video.videoWidth) return null;
+            try {
+                // 缩小到最大1280宽再编码，减少主线程卡顿
+                const maxW = 1280;
+                const scale = Math.min(1, maxW / video.videoWidth);
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.round(video.videoWidth * scale);
+                canvas.height = Math.round(video.videoHeight * scale);
+                canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+                return canvas.toDataURL('image/jpeg', 0.8);
+            } catch (e) {
+                return null;
+            }
+        }
+
+        /* ==================== 提示音 ==================== */
+        let audioCtx = null;
+        function ensureAudioCtx() {
+            if (!audioCtx) {
+                const AC = window.AudioContext || window.webkitAudioContext;
+                if (AC) audioCtx = new AC();
+            }
+            if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+            return audioCtx;
+        }
+        function beep() {
+            try {
+                const ctx = ensureAudioCtx();
+                if (!ctx) return;
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.value = 1800;
+                gain.gain.setValueAtTime(0.6, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+                osc.connect(gain).connect(ctx.destination);
+                osc.start(ctx.currentTime);
+                osc.stop(ctx.currentTime + 0.15);
+            } catch (e) { /* 提示音失败不影响主流程 */ }
+        }
+
+        function addRecord(tracking) {
+            const photo = capturePhoto();
+            const rec = { id: nextId++, tracking, photo };
+            records.push(rec);
+            renderRecords();
+            if (photo) {
+                photoImg.src = photo;
+                photoPreview.style.display = 'block';
+                previewRecordId = rec.id;
+            }
+            setStatus('已添加：' + tracking, '#86efac');
+            beep();
+            if (navigator.vibrate) navigator.vibrate(60);
+        }
+
+        function deleteRecord(id) {
+            const idx = records.findIndex(r => r.id === id);
+            if (idx === -1) return;
+            records.splice(idx, 1);
+            if (previewRecordId === id) hidePhotoPreview();
+            renderRecords();
+            setStatus('已删除', '#fca5a5');
+        }
+
+        function hidePhotoPreview() {
+            photoPreview.style.display = 'none';
+            photoImg.src = '';
+            previewRecordId = null;
+        }
+
+        photoPreview.addEventListener('click', () => {
+            if (previewRecordId !== null) deleteRecord(previewRecordId);
+            else hidePhotoPreview();
+        });
+
+        function renderRecords() {
+            if (records.length === 0) {
+                recordList.innerHTML = '<li class="empty-tip">暂无记录</li>';
+            } else {
+                recordList.innerHTML = records.map(r => `
+                    <li class="record-item" data-id="${r.id}">
+                        ${r.photo
+                            ? `<img src="${r.photo}" class="record-thumb" alt="包裹照片">`
+                            : `<div class="record-thumb placeholder">无图</div>`}
+                        <div class="record-info">
+                            <span class="tracking-number">${escapeHtml(r.tracking)}</span>
+                        </div>
+                        <button class="del-btn" data-id="${r.id}">×</button>
+                    </li>
+                `).join('');
+            }
+            recordCount.textContent = '共 ' + records.length + ' 条';
+        }
+
+        function escapeHtml(s) {
+            return s.replace(/[&<>"']/g, c => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[c]));
+        }
+
+        // 事件委托：删除 / 查看大图
+        recordList.addEventListener('click', (e) => {
+            const delBtn = e.target.closest('.del-btn');
+            if (delBtn) {
+                deleteRecord(parseInt(delBtn.dataset.id, 10));
+                return;
+            }
+            const thumb = e.target.closest('img.record-thumb');
+            if (thumb) {
+                imageOverlayImg.src = thumb.src;
+                imageOverlay.classList.add('show');
+            }
+        });
+        imageOverlay.addEventListener('click', () => {
+            imageOverlay.classList.remove('show');
+            imageOverlayImg.src = '';
+        });
+
+        /* ==================== 状态提示 ==================== */
+        let statusTimer = null;
+        function setStatus(text, color) {
+            scanStatus.textContent = text;
+            scanStatus.style.color = color || '#fff';
+            scanStatus.classList.add('show');
+            if (statusTimer) clearTimeout(statusTimer);
+            statusTimer = setTimeout(() => scanStatus.classList.remove('show'), 1800);
+        }
+
+        /* ==================== 摄像头管理 ==================== */
+        function stopStream() {
+            if (stream) {
+                stream.getTracks().forEach(t => t.stop());
+                stream = null;
+            }
+            video.srcObject = null;
+        }
+
+        async function openStream(deviceId) {
+            stopStream();
+            const videoConstraints = deviceId
+                ? { deviceId: { exact: deviceId } }
+                : { facingMode: { ideal: 'environment' } };
+            videoConstraints.width = { ideal: 1920 };
+            videoConstraints.height = { ideal: 1080 };
+            stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
+            video.srcObject = stream;
+            await video.play();
+            // 尽力开启连续对焦，提高条码清晰度（不支持则忽略）
+            const track = stream.getVideoTracks()[0];
+            if (track && track.applyConstraints) {
+                track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+            }
+        }
+
+        const CAM_KEY = 'scanner_camera_id';
+
+        // 枚举后置摄像头，主摄排第一（排除超广角/长焦/微距等）
+        async function listRearCameras() {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const cams = devices.filter(d => d.kind === 'videoinput');
+            const rear = cams.filter(d => /back|rear|environment|后置|後置/i.test(d.label));
+            const pool = rear.length ? rear : cams;
+            const NON_MAIN = /ultra|wide[- ]?angle|广角|tele|长焦|macro|微距|depth|景深|virtual/i;
+            const main = [], others = [];
+            for (const c of pool) {
+                (NON_MAIN.test(c.label) ? others : main).push(c);
+            }
+            return main.concat(others);
+        }
+
+        async function startCamera() {
+            launchBtn.classList.add('loading');
+            launchBtn.textContent = '请求中...';
+            launchError.classList.remove('show');
+            launchRetry.classList.remove('show');
+            try {
+                await initEngine();
+                // 先用 environment 拿到权限（此后 enumerateDevices 才有 label）
+                await openStream(null);
+                cameras = await listRearCameras();
+
+                // 优先使用上次手动选择并记住的镜头，其次用启发式排序的第一个
+                const savedId = localStorage.getItem(CAM_KEY);
+                const currentId = stream.getVideoTracks()[0].getSettings().deviceId;
+                let targetIdx = cameras.findIndex(c => c.deviceId === savedId);
+                if (targetIdx === -1) targetIdx = 0;
+                if (cameras.length && cameras[targetIdx].deviceId !== currentId) {
+                    cameraIndex = targetIdx;
+                    await openStream(cameras[targetIdx].deviceId);
+                } else {
+                    cameraIndex = Math.max(0, cameras.findIndex(c => c.deviceId === currentId));
+                }
+                switchCameraBtn.style.display = cameras.length > 1 ? 'inline-block' : 'none';
+
+                startDetectLoop();
+                launchOverlay.classList.add('hidden');
+                setStatus(engine.type === 'native' ? '扫码已就绪' : '扫码已就绪（兼容模式）');
+            } catch (err) {
+                stopStream();
+                launchBtn.classList.remove('loading');
+                launchBtn.textContent = '重新启动';
+                let msg;
+                if (err && err.name === 'NotAllowedError') msg = '摄像头权限被拒绝，请在浏览器设置中允许';
+                else if (err && err.name === 'NotFoundError') msg = '未找到可用摄像头';
+                else if (err && err.name === 'NotReadableError') msg = '摄像头被其他应用占用';
+                else msg = '启动失败：' + (err && err.message ? err.message : err);
+                launchError.textContent = msg;
+                launchError.classList.add('show');
+                launchRetry.classList.add('show');
+            }
+        }
+
+        switchCameraBtn.addEventListener('click', async () => {
+            if (cameras.length <= 1) return;
+            cameraIndex = (cameraIndex + 1) % cameras.length;
+            const cam = cameras[cameraIndex];
+            try {
+                stopDetectLoop();
+                await openStream(cam.deviceId);
+                startDetectLoop();
+                // 记住用户手动选择的镜头，下次启动直接使用
+                localStorage.setItem(CAM_KEY, cam.deviceId);
+                setStatus('已切换镜头 ' + (cameraIndex + 1) + '/' + cameras.length);
+            } catch (e) {
+                setStatus('切换失败', '#fca5a5');
+            }
+        });
+
+        launchBtn.addEventListener('click', () => { ensureAudioCtx(); startCamera(); });
+        launchRetry.addEventListener('click', () => { ensureAudioCtx(); startCamera(); });
+
+        /* ==================== 手动输入 ==================== */
+        manualAddBtn.addEventListener('click', () => {
+            const val = manualInput.value.trim();
+            if (!val) { setStatus('请输入单号', '#fca5a5'); return; }
+            // 先收起键盘、复位视口（不等添加记录，两者互不相干）
+            manualInput.value = '';
+            manualInput.blur();
+            resetViewport();
+            // 添加记录（含截图、渲染列表等较重操作）延后到下一帧执行
+            setTimeout(() => addRecord(val), 0);
+        });
+        manualInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); manualAddBtn.click(); }
+        });
+        // 键盘弹出时确保输入框可见（瞬时滚动，不用平滑动画）
+        manualInput.addEventListener('focus', () => {
+            setTimeout(() => {
+                manualInput.scrollIntoView({ block: 'center', behavior: 'auto' });
+            }, 250);
+        });
+        manualInput.addEventListener('blur', resetViewport);
+
+        // 键盘收起后，立即把页面滚回顶部，让固定元素瞬间归位
+        function resetViewport() {
+            requestAnimationFrame(() => {
+                window.scrollTo(0, 0);
+                document.documentElement.scrollTop = 0;
+                document.body.scrollTop = 0;
+            });
+        }
+        // 兜底：监听可视视口变化，键盘完全收起时再校正一次
+        if (window.visualViewport) {
+            let lastVH = window.visualViewport.height;
+            window.visualViewport.addEventListener('resize', () => {
+                const vh = window.visualViewport.height;
+                // 高度明显变大 = 键盘收起
+                if (vh - lastVH > 100 && document.activeElement !== manualInput) {
+                    resetViewport();
+                }
+                lastVH = vh;
+            });
+        }
+
+        /* ==================== 清空 / 入库 ==================== */
+        clearAllBtn.addEventListener('click', () => {
+            if (!records.length) return;
+            if (confirm('确定清空所有扫描记录吗？')) {
+                records = [];
+                hidePhotoPreview();
+                renderRecords();
+            }
+        });
+
+        submitBtn.addEventListener('click', () => {
+            if (!records.length) { alert('当前没有扫描记录，无需入库。'); return; }
+            if (confirm('确认入库 ' + records.length + ' 件快递吗？')) {
+                alert('入库成功！共 ' + records.length + ' 件。');
+                records = [];
+                hidePhotoPreview();
+                renderRecords();
+            }
+        });
+
+        /* ==================== 生命周期 ==================== */
+        document.addEventListener('visibilitychange', () => {
+            // 页面切后台暂停识别循环，回来恢复（节省电量，防止后台误扫）
+            if (document.hidden) {
+                if (loopTimer) { clearInterval(loopTimer); loopTimer = null; }
+            } else if (running && stream) {
+                startDetectLoop();
+            }
+        });
+        window.addEventListener('beforeunload', () => {
+            stopDetectLoop();
+            stopStream();
+        });
+
+        renderRecords();
+    })();
+    </script>
+</body>
+</html>
