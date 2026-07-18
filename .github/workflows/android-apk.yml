@@ -11,6 +11,9 @@ on:
       - ".github/workflows/android-apk.yml"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -36,20 +39,43 @@ jobs:
         run: chmod +x gradlew
         working-directory: android
 
-      - name: Build release APK
+      # debug 包自带 debug 签名，侧载安装最稳妥
+      - name: Build debug APK
         working-directory: android
-        run: ./gradlew assembleRelease --no-daemon --stacktrace
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: List APK outputs
-        if: always()
+      - name: Prepare installable APK
         run: |
-          echo "=== apk tree ==="
-          find android/app/build/outputs -type f -name '*.apk' -print || true
-          ls -la android/app/build/outputs/apk/release || true
+          set -euo pipefail
+          SRC=$(find android/app/build/outputs/apk/debug -name '*.apk' | head -n 1)
+          echo "Found APK: $SRC"
+          test -n "$SRC"
+          mkdir -p dist
+          cp "$SRC" dist/tugulu-scanner.apk
+          ls -lh dist/tugulu-scanner.apk
+          file dist/tugulu-scanner.apk
+          unzip -l dist/tugulu-scanner.apk | head -n 20
+          # 校验签名，避免产出“损坏”安装包
+          "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" verify --verbose dist/tugulu-scanner.apk
+          "$ANDROID_SDK_ROOT/build-tools/34.0.0/aapt" dump badging dist/tugulu-scanner.apk | head -n 5
 
-      - name: Upload release APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: tugulu-scanner-apk
-          path: android/app/build/outputs/apk/release/*.apk
+          path: dist/tugulu-scanner.apk
           if-no-files-found: error
+
+      - name: Create GitHub Release with APK
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ github.run_number }}
+          name: 兔咕噜扫码入库 APK #${{ github.run_number }}
+          body: |
+            安装说明：
+            1. 下载下方的 `tugulu-scanner.apk`（不要下载成 zip 后直接改后缀）
+            2. 传到手机后点击安装
+            3. 如提示未知来源，请允许安装
+          files: dist/tugulu-scanner.apk
+          generate_release_notes: false

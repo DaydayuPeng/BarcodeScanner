@@ -69,7 +69,8 @@ npm run dev
 **通过 GitHub Actions 打包 APK：**
 
 1. 推送仓库到 GitHub  
-2. 打开 Actions → `Build Android APK` → Run workflow  
-3. 构建完成后下载 Artifact `tugulu-scanner-apk`，安装到手机  
+2. 打开 Actions → `Build Android APK`（或到 **Releases** 下载）  
+3. Artifact 下载得到的是 zip，**先解压**再安装里面的 `tugulu-scanner.apk`  
+   （不要把 zip 直接改成 `.apk`，否则手机会提示安装包损坏）  
 
 详细说明见 [`android/README.md`](android/README.md)。

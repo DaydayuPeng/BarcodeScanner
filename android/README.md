@@ -14,12 +14,14 @@
 
 ## 不装 Android Studio，用 Git 打包
 
-1. 把本仓库推送到 GitHub
-2. 打开仓库 **Actions** → **Build Android APK**
-3. 点击 **Run workflow**（或推送 `android/` 目录下的改动自动触发）
-4. 构建完成后在该次运行页面的 **Artifacts** 下载 `tugulu-scanner-apk`
-5. 解压得到 `app-release-unsigned.apk`，传到手机安装  
-   （正式签名未配置时为 unsigned；多数安卓机可直接安装 debug 包，需要更稳妥可下载 `tugulu-scanner-debug-apk`）
+1. 把本仓库推送到 GitHub  
+2. 打开仓库 **Actions** → **Build Android APK**（推送 `android/` 会自动触发）  
+3. **推荐**：到仓库 **Releases** 页直接下载 `tugulu-scanner.apk`  
+4. 或者在 Actions 成功运行页下载 Artifact `tugulu-scanner-apk`：  
+   - GitHub 给的是一个 **zip**，必须先解压  
+   - 解压后里面才是 `tugulu-scanner.apk`  
+   - **不要**把 zip 改后缀成 `.apk` 去安装（手机会提示“安装包已损坏”）  
+5. 传到手机安装；若提示未知来源，在系统设置里允许该来源安装  
 
 ## 本地有 JDK 时也可命令行打包
 
@@ -31,8 +33,7 @@ gradlew.bat assembleRelease # Windows
 
 产物：
 
-- `app/build/outputs/apk/release/app-release-unsigned.apk`
-- `app/build/outputs/apk/debug/app-debug.apk`
+- `app/build/outputs/apk/debug/app-debug.apk`（推荐侧载安装）
 
 ## 登录说明
 
