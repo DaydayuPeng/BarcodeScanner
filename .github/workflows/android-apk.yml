@@ -14,9 +14,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: android
 
     steps:
       - name: Checkout
@@ -27,21 +24,28 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        with:
+          # 必须单行空格分隔；多行会被当成一个错误包名
+          packages: "tools platform-tools platforms;android-34 build-tools;34.0.0"
 
       - name: Make gradlew executable
         run: chmod +x gradlew
-
-      - name: Accept Android licenses
-        run: yes | sdkmanager --licenses || true
+        working-directory: android
 
       - name: Build release APK
+        working-directory: android
         run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: List APK outputs
+        if: always()
+        run: |
+          echo "=== apk tree ==="
+          find android/app/build/outputs -type f -name '*.apk' -print || true
+          ls -la android/app/build/outputs/apk/release || true
 
       - name: Upload release APK
         uses: actions/upload-artifact@v4

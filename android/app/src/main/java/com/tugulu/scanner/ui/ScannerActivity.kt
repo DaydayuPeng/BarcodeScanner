@@ -23,9 +23,6 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.camera2.interop.Camera2CameraInfo
-import androidx.camera.camera2.interop.ExperimentalCamera2Interop
-import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -54,7 +51,6 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
-@OptIn(ExperimentalCamera2Interop::class)
 class ScannerActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityScannerBinding
@@ -67,8 +63,7 @@ class ScannerActivity : AppCompatActivity() {
     private var cameraProvider: ProcessCameraProvider? = null
     private var cameraExecutor: ExecutorService? = null
     private var barcodeScanner: BarcodeScanner? = null
-    private var cameraInfos: List<CameraInfo> = emptyList()
-    private var cameraIndex = 0
+    private var lensFacing = CameraSelector.LENS_FACING_BACK
     private var analyzingPaused = AtomicBoolean(false)
     private val recentCodes = HashMap<String, Long>()
     private var latestFrameBytes: ByteArray? = null
@@ -170,19 +165,12 @@ class ScannerActivity : AppCompatActivity() {
         val provider = cameraProvider ?: return
         provider.unbindAll()
 
-        cameraInfos = provider.availableCameraInfos
-        if (cameraInfos.isEmpty()) {
-            showStatus("未找到可用摄像头", true)
-            return
-        }
-        // 优先恢复上次选择；否则优先后置
+        // 恢复上次镜头朝向（back/front）
         val saved = app.session.preferredCameraId
-        val savedIdx = cameraInfos.indexOfFirst { cameraIdOf(it) == saved }
-        cameraIndex = when {
-            savedIdx >= 0 -> savedIdx
-            else -> cameraInfos.indexOfFirst {
-                it.lensFacing == CameraSelector.LENS_FACING_BACK
-            }.coerceAtLeast(0)
+        if (saved == CameraSelector.LENS_FACING_FRONT.toString()) {
+            lensFacing = CameraSelector.LENS_FACING_FRONT
+        } else if (saved == CameraSelector.LENS_FACING_BACK.toString()) {
+            lensFacing = CameraSelector.LENS_FACING_BACK
         }
 
         val preview = Preview.Builder()
@@ -198,33 +186,38 @@ class ScannerActivity : AppCompatActivity() {
             analyzeFrame(imageProxy)
         }
 
-        val info = cameraInfos[cameraIndex.coerceIn(0, cameraInfos.lastIndex)]
-        val selector = info.cameraSelector
+        val selector = CameraSelector.Builder()
+            .requireLensFacing(lensFacing)
+            .build()
 
         try {
             provider.bindToLifecycle(this, selector, preview, analysis)
+            // 有前后摄时显示切换按钮
+            val hasBack = provider.hasCamera(
+                CameraSelector.Builder().requireLensFacing(CameraSelector.LENS_FACING_BACK).build()
+            )
+            val hasFront = provider.hasCamera(
+                CameraSelector.Builder().requireLensFacing(CameraSelector.LENS_FACING_FRONT).build()
+            )
             binding.btnSwitchCamera.visibility =
-                if (cameraInfos.size > 1) View.VISIBLE else View.GONE
+                if (hasBack && hasFront) View.VISIBLE else View.GONE
         } catch (e: Exception) {
             showStatus("绑定摄像头失败：${e.message}", true)
         }
     }
 
     private fun switchCamera() {
-        if (cameraInfos.size <= 1) return
-        cameraIndex = (cameraIndex + 1) % cameraInfos.size
-        val info = cameraInfos[cameraIndex]
-        app.session.preferredCameraId = cameraIdOf(info)
-        bindCameraUseCases()
-        showStatus("已切换镜头 ${cameraIndex + 1}/${cameraInfos.size}")
-    }
-
-    private fun cameraIdOf(info: CameraInfo): String {
-        return try {
-            Camera2CameraInfo.from(info).cameraId
-        } catch (_: Exception) {
-            info.toString()
+        lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
+            CameraSelector.LENS_FACING_FRONT
+        } else {
+            CameraSelector.LENS_FACING_BACK
         }
+        app.session.preferredCameraId = lensFacing.toString()
+        bindCameraUseCases()
+        showStatus(
+            if (lensFacing == CameraSelector.LENS_FACING_BACK) "已切换到后置摄像头"
+            else "已切换到前置摄像头"
+        )
     }
 
     private fun analyzeFrame(imageProxy: ImageProxy) {
