@@ -8,7 +8,7 @@ class SessionStore(context: Context) {
 
     var baseUrl: String
         get() = prefs.getString(KEY_BASE_URL, BuildConfig.DEFAULT_BASE_URL)?.trim().orEmpty()
-        set(value) = prefs.edit().putString(KEY_BASE_URL, value.trim().trimEnd('/')).apply()
+        set(value) = prefs.edit().putString(KEY_BASE_URL, ApiClient.normalizeBaseUrl(value)).apply()
 
     var token: String?
         get() = prefs.getString(KEY_TOKEN, null)

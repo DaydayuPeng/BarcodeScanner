@@ -136,9 +136,28 @@ class ApiClient(private val session: SessionStore) {
     }
 
     private fun join(base: String, path: String): String {
-        val b = base.trim().trimEnd('/')
+        val b = normalizeBaseUrl(base)
         if (b.isEmpty()) throw ApiException("请先填写服务器地址")
         return b + path
+    }
+
+    companion object {
+        /** 纠正常见输入错误：缺协议、单斜杠（http:/x）、全角冒号/句号、空格、末尾斜杠 */
+        fun normalizeBaseUrl(raw: String): String {
+            var s = raw.trim()
+                .replace('：', ':')
+                .replace('。', '.')
+                .replace("　", "")
+                .replace(" ", "")
+            if (s.isEmpty()) return ""
+            s = s.replace(Regex("^(https?):/+", RegexOption.IGNORE_CASE)) { m ->
+                m.groupValues[1].lowercase() + "://"
+            }
+            if (!s.startsWith("http://") && !s.startsWith("https://")) {
+                s = "http://$s"
+            }
+            return s.trimEnd('/')
+        }
     }
 }
 

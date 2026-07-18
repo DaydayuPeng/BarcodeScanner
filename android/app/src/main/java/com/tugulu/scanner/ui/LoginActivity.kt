@@ -34,7 +34,8 @@ class LoginActivity : AppCompatActivity() {
     }
 
     private fun doLogin() {
-        val baseUrl = binding.etBaseUrl.text?.toString()?.trim().orEmpty()
+        val baseUrl = com.tugulu.scanner.data.ApiClient
+            .normalizeBaseUrl(binding.etBaseUrl.text?.toString().orEmpty())
         val username = binding.etUsername.text?.toString()?.trim().orEmpty()
         val password = binding.etPassword.text?.toString().orEmpty()
         if (baseUrl.isEmpty() || username.isEmpty() || password.isEmpty()) {
