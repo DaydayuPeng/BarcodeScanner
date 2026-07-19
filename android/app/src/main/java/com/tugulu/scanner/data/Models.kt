@@ -34,5 +34,5 @@ data class FailItem(
 data class ScanRecord(
     val id: Long,
     val trackingNo: String,
-    val photoPath: String?
+    var photoPath: String?
 )

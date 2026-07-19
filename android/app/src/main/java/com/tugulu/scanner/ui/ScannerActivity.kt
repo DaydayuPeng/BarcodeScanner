@@ -12,6 +12,8 @@ import android.graphics.YuvImage
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -81,6 +83,8 @@ class ScannerActivity : AppCompatActivity() {
     private var statusHideAt = 0L
     private var tone: ToneGenerator? = null
     private var lastAutoFocusAt = 0L
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var photoExecutor: ExecutorService? = null
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -126,20 +130,16 @@ class ScannerActivity : AppCompatActivity() {
         }
 
         cameraExecutor = Executors.newSingleThreadExecutor()
+        photoExecutor = Executors.newSingleThreadExecutor()
+        // 仅快递一维码（对齐 floatscan / scanner.html）
         barcodeScanner = BarcodeScanning.getClient(
             BarcodeScannerOptions.Builder()
                 .setBarcodeFormats(
                     Barcode.FORMAT_CODE_128,
                     Barcode.FORMAT_CODE_39,
-                    Barcode.FORMAT_CODE_93,
                     Barcode.FORMAT_EAN_13,
-                    Barcode.FORMAT_EAN_8,
-                    Barcode.FORMAT_UPC_A,
-                    Barcode.FORMAT_UPC_E,
                     Barcode.FORMAT_ITF,
-                    Barcode.FORMAT_CODABAR,
-                    Barcode.FORMAT_QR_CODE,
-                    Barcode.FORMAT_DATA_MATRIX
+                    Barcode.FORMAT_CODABAR
                 )
                 .build()
         )
@@ -162,7 +162,7 @@ class ScannerActivity : AppCompatActivity() {
             try {
                 cameraProvider = future.get()
                 bindCameraUseCases()
-                showStatus("扫码已就绪（ZXing+ML Kit）")
+                showStatus("扫码已就绪（一维码）")
             } catch (e: Exception) {
                 showStatus("摄像头启动失败：${e.message}", true)
             }
@@ -311,7 +311,8 @@ class ScannerActivity : AppCompatActivity() {
         val code = extractTrackingNo(raw)
         if (code.isEmpty()) return
         if (isDuplicate(code)) return
-        runOnUiThread { addRecord(code, capturePhotoFile()) }
+        // 扫码优先：先上主线程落单号，截图后台补
+        runOnUiThread { addRecord(code, deferPhoto = true) }
     }
 
     private fun extractTrackingNo(raw: String): String {
@@ -343,22 +344,39 @@ class ScannerActivity : AppCompatActivity() {
         binding.etManual.setText("")
         binding.etManual.clearFocus()
         analyzingPaused.set(false)
-        addRecord(value, capturePhotoFile())
+        addRecord(value, deferPhoto = true)
     }
 
-    private fun addRecord(tracking: String, photoPath: String?) {
-        val rec = ScanRecord(nextId++, tracking, photoPath)
+    private fun addRecord(tracking: String, deferPhoto: Boolean) {
+        val rec = ScanRecord(nextId++, tracking, null)
         records.add(rec)
         refreshList()
-        if (!photoPath.isNullOrBlank()) {
-            val bmp = BitmapFactory.decodeFile(photoPath)
-            if (bmp != null) {
-                binding.ivLastPhoto.setImageBitmap(bmp)
-                binding.ivLastPhoto.visibility = View.VISIBLE
-            }
-        }
         showStatus("已添加：$tracking")
         beepAndVibrate()
+        if (deferPhoto) schedulePhotoCapture(rec.id)
+    }
+
+    /** 空闲时补截图，避免和连续扫码抢同一帧处理时间 */
+    private fun schedulePhotoCapture(recordId: Long) {
+        val executor = photoExecutor ?: return
+        mainHandler.postDelayed({
+            executor.execute {
+                val path = capturePhotoFile() ?: return@execute
+                mainHandler.post {
+                    val rec = records.find { it.id == recordId } ?: run {
+                        File(path).delete()
+                        return@post
+                    }
+                    rec.photoPath = path
+                    adapter.notifyPhotoUpdated(recordId)
+                    val bmp = BitmapFactory.decodeFile(path)
+                    if (bmp != null) {
+                        binding.ivLastPhoto.setImageBitmap(bmp)
+                        binding.ivLastPhoto.visibility = View.VISIBLE
+                    }
+                }
+            }
+        }, 60)
     }
 
     private fun deleteRecord(item: ScanRecord) {
@@ -470,8 +488,8 @@ class ScannerActivity : AppCompatActivity() {
                 val m = Matrix().apply { postRotate(rotation.toFloat()) }
                 bmp = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
             }
-            // 缩小到最大 1280
-            val maxW = 1280
+            // 缩略图即可（预览频次低），减小编码耗时
+            val maxW = 720
             if (bmp.width > maxW) {
                 val scale = maxW.toFloat() / bmp.width
                 bmp = Bitmap.createScaledBitmap(
@@ -483,7 +501,7 @@ class ScannerActivity : AppCompatActivity() {
             }
             val file = File(cacheDir, "scan_${System.currentTimeMillis()}.jpg")
             FileOutputStream(file).use { out ->
-                bmp.compress(Bitmap.CompressFormat.JPEG, 80, out)
+                bmp.compress(Bitmap.CompressFormat.JPEG, 70, out)
             }
             file.absolutePath
         } catch (_: Exception) {
@@ -545,7 +563,9 @@ class ScannerActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        mainHandler.removeCallbacksAndMessages(null)
         cameraExecutor?.shutdown()
+        photoExecutor?.shutdown()
         barcodeScanner?.close()
         tone?.release()
     }

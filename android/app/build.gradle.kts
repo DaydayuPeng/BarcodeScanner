@@ -11,8 +11,8 @@ android {
         applicationId = "com.tugulu.scanner"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
         buildConfigField("String", "DEFAULT_BASE_URL", "\"https://toogoolu.szh5.cn\"")
     }
 

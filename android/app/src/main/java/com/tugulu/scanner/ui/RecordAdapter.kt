@@ -20,6 +20,11 @@ class RecordAdapter(
         notifyDataSetChanged()
     }
 
+    fun notifyPhotoUpdated(id: Long) {
+        val index = items.indexOfFirst { it.id == id }
+        if (index >= 0) notifyItemChanged(index)
+    }
+
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
         val binding = ItemRecordBinding.inflate(LayoutInflater.from(parent.context), parent, false)
         return VH(binding)
