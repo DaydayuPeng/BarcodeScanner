@@ -11,8 +11,8 @@ android {
         applicationId = "com.tugulu.scanner"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
         buildConfigField("String", "DEFAULT_BASE_URL", "\"https://toogoolu.szh5.cn\"")
     }
 
@@ -59,13 +59,14 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
 
-    // CameraX + ML Kit barcode
+    // CameraX + ML Kit barcode + ZXing（参照 floatscan TRY_HARDER 提升一维码灵敏度）
     val camerax = "1.3.4"
     implementation("androidx.camera:camera-core:$camerax")
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")
     implementation("androidx.camera:camera-view:$camerax")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
+    implementation("com.google.zxing:core:3.5.3")
 
     // Network
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

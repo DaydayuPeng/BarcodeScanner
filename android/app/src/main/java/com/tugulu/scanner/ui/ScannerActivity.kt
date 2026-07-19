@@ -23,10 +23,13 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.SurfaceOrientedMeteringPointFactory
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -41,6 +44,7 @@ import com.tugulu.scanner.TuguluApp
 import com.tugulu.scanner.data.ApiException
 import com.tugulu.scanner.data.ScanRecord
 import com.tugulu.scanner.databinding.ActivityScannerBinding
+import com.tugulu.scanner.scan.ZxingBarcodeHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -49,6 +53,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class ScannerActivity : AppCompatActivity() {
@@ -61,8 +66,10 @@ class ScannerActivity : AppCompatActivity() {
     private var nextId = 1L
 
     private var cameraProvider: ProcessCameraProvider? = null
+    private var camera: Camera? = null
     private var cameraExecutor: ExecutorService? = null
     private var barcodeScanner: BarcodeScanner? = null
+    private val zxingHelper = ZxingBarcodeHelper()
     private var lensFacing = CameraSelector.LENS_FACING_BACK
     private var analyzingPaused = AtomicBoolean(false)
     private val recentCodes = HashMap<String, Long>()
@@ -73,6 +80,7 @@ class ScannerActivity : AppCompatActivity() {
     private val frameLock = Any()
     private var statusHideAt = 0L
     private var tone: ToneGenerator? = null
+    private var lastAutoFocusAt = 0L
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -154,7 +162,7 @@ class ScannerActivity : AppCompatActivity() {
             try {
                 cameraProvider = future.get()
                 bindCameraUseCases()
-                showStatus("扫码已就绪（ML Kit）")
+                showStatus("扫码已就绪（ZXing+ML Kit）")
             } catch (e: Exception) {
                 showStatus("摄像头启动失败：${e.message}", true)
             }
@@ -177,8 +185,9 @@ class ScannerActivity : AppCompatActivity() {
             .build()
             .also { it.setSurfaceProvider(binding.previewView.surfaceProvider) }
 
+        // 更高分析分辨率，利于细条码 / 远距离识别（对齐 floatscan TRY_HARDER 思路）
         val analysis = ImageAnalysis.Builder()
-            .setTargetResolution(Size(1280, 720))
+            .setTargetResolution(Size(1920, 1080))
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build()
 
@@ -191,7 +200,8 @@ class ScannerActivity : AppCompatActivity() {
             .build()
 
         try {
-            provider.bindToLifecycle(this, selector, preview, analysis)
+            camera = provider.bindToLifecycle(this, selector, preview, analysis)
+            requestCenterAutoFocus()
             // 有前后摄时显示切换按钮
             val hasBack = provider.hasCamera(
                 CameraSelector.Builder().requireLensFacing(CameraSelector.LENS_FACING_BACK).build()
@@ -203,6 +213,22 @@ class ScannerActivity : AppCompatActivity() {
                 if (hasBack && hasFront) View.VISIBLE else View.GONE
         } catch (e: Exception) {
             showStatus("绑定摄像头失败：${e.message}", true)
+        }
+    }
+
+    /** 周期性中心对焦，提升条码清晰度 */
+    private fun requestCenterAutoFocus() {
+        val cam = camera ?: return
+        try {
+            val factory = SurfaceOrientedMeteringPointFactory(1f, 1f)
+            val point = factory.createPoint(0.5f, 0.5f)
+            val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF)
+                .setAutoCancelDuration(3, TimeUnit.SECONDS)
+                .build()
+            cam.cameraControl.startFocusAndMetering(action)
+            lastAutoFocusAt = SystemClock.elapsedRealtime()
+        } catch (_: Exception) {
+            // 部分机型不支持对焦点，忽略
         }
     }
 
@@ -230,9 +256,16 @@ class ScannerActivity : AppCompatActivity() {
             imageProxy.close()
             return
         }
-        // 缓存当前帧供截图
+
+        // 约每 2.5s 触发一次中心对焦，避免远距条码糊掉
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastAutoFocusAt > 2500) {
+            runOnUiThread { requestCenterAutoFocus() }
+        }
+
+        var nv21: ByteArray? = null
         try {
-            val nv21 = yuv420888ToNv21(imageProxy)
+            nv21 = yuv420888ToNv21(imageProxy)
             synchronized(frameLock) {
                 latestFrameBytes = nv21
                 latestFrameWidth = imageProxy.width
@@ -241,6 +274,20 @@ class ScannerActivity : AppCompatActivity() {
             }
         } catch (_: Exception) {
             // ignore frame cache failure
+        }
+
+        // 优先 ZXing（floatscan 同款 TRY_HARDER / 多区域），命中则跳过本帧 ML Kit
+        if (nv21 != null) {
+            try {
+                val zxingText = zxingHelper.decodeNv21(nv21, imageProxy.width, imageProxy.height)
+                if (!zxingText.isNullOrBlank()) {
+                    onDecoded(zxingText)
+                    imageProxy.close()
+                    return
+                }
+            } catch (_: Exception) {
+                // ZXing 失败继续走 ML Kit
+            }
         }
 
         val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
@@ -254,6 +301,7 @@ class ScannerActivity : AppCompatActivity() {
                 for (b in barcodes) {
                     val raw = b.rawValue ?: continue
                     onDecoded(raw)
+                    break
                 }
             }
             .addOnCompleteListener { imageProxy.close() }
